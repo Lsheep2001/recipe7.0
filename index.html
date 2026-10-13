@@ -196,13 +196,14 @@ a.source-link{color:#2563eb;text-decoration:underline;}
 <script>
 lucide.createIcons();
 
-// ========== 配置区：替换成你自己的 ==========
+// ========== 配置区 ==========
 const SUPABASE_URL = "https://mpwohfwnxyazorhkxbod.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wd29oZndueHlhem9yaGt4Ym9kIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3OTI3MzksImV4cCI6MjEwNzM2ODczOX0.4hKHqKgWtg_ozee0fPsp-Ag53MPDQiNQPnVSNO33jAo";
-// =========================================
+// =============================
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const POLL_INTERVAL = 5000; // 5秒刷新一次
+// ⚠️ 关键修复：变量名改为 supabaseClient，避免与 CDN 的 supabase 冲突
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const POLL_INTERVAL = 5000;
 
 let currentDate = new Date().toISOString().split('T')[0];
 let selectedRecipeId = null;
@@ -214,7 +215,6 @@ let timerInterval = null;
 let timerSeconds = 0;
 let timerRunning = false;
 
-// 内存缓存
 let cachedRecipes = [];
 let cachedLogs = [];
 let cachedShopping = [];
@@ -223,9 +223,9 @@ let cachedShopping = [];
 async function loadAll() {
   try {
     const [r, l, s] = await Promise.all([
-      supabase.from('recipes').select('*').order('created_at', { ascending: false }),
-      supabase.from('cook_logs').select('*').order('created_at', { ascending: false }),
-      supabase.from('shopping_list').select('*').order('created_at', { ascending: false })
+      supabaseClient.from('recipes').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('cook_logs').select('*').order('created_at', { ascending: false }),
+      supabaseClient.from('shopping_list').select('*').order('created_at', { ascending: false })
     ]);
     if (r.error) throw r.error;
     if (l.error) throw l.error;
@@ -233,29 +233,32 @@ async function loadAll() {
     cachedRecipes = r.data || [];
     cachedLogs = l.data || [];
     cachedShopping = s.data || [];
-    document.getElementById('syncStatus').textContent = '✅ 已连接 · ' + new Date().toLocaleTimeString();
+    const el = document.getElementById('syncStatus');
+    if (el) el.textContent = '✅ 已连接 · ' + new Date().toLocaleTimeString();
   } catch(e) {
-    document.getElementById('syncStatus').textContent = '❌ 连接失败：' + e.message;
+    const el = document.getElementById('syncStatus');
+    if (el) el.textContent = '❌ 连接失败：' + e.message;
+    console.error('Supabase 错误:', e);
   }
 }
 
 async function dbAdd(table, data) {
-  const { error } = await supabase.from(table).insert(data);
+  const { error } = await supabaseClient.from(table).insert(data);
   if (error) { alert('保存失败：' + error.message); throw error; }
   await loadAll();
 }
 async function dbPut(table, data) {
-  const { error } = await supabase.from(table).upsert(data);
+  const { error } = await supabaseClient.from(table).upsert(data);
   if (error) { alert('更新失败：' + error.message); throw error; }
   await loadAll();
 }
 async function dbDel(table, id) {
-  const { error } = await supabase.from(table).delete().eq('id', id);
+  const { error } = await supabaseClient.from(table).delete().eq('id', id);
   if (error) { alert('删除失败：' + error.message); throw error; }
   await loadAll();
 }
 async function dbClear(table) {
-  const { error } = await supabase.from(table).delete().neq('id', '___never___');
+  const { error } = await supabaseClient.from(table).delete().neq('id', '___never___');
   if (error) { alert('清空失败：' + error.message); throw error; }
   await loadAll();
 }
@@ -688,7 +691,7 @@ async function bindEvents(){
   document.getElementById("addToShoppingBtn").onclick = addToShoppingList;
   document.getElementById("addIngredientBtn").onclick = () => addIngredientRow();
 
-  // 轮询刷新（方案二核心）
+  // 轮询刷新
   setInterval(async () => {
     await loadAll();
     const activePage = document.querySelector(".page.active").id;
