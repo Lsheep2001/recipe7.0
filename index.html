@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>我的食谱记录</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+tailwind.config = {
+  theme: { extend: { colors: {
+    primary: '#22c55e', primaryDark: '#16a34a',
+    neutral: {50:'#f9fafb',100:'#f3f4f6',200:'#e5e7eb',400:'#9ca3af',600:'#4b5563',800:'#1f2937'}
+  }}}
+}
+</script>
+<style>
+*{ -webkit-tap-highlight-color:transparent; }
+.page{display:none;}
+.page.active{display:block;}
+.modal{display:none;}
+.modal.show{display:flex;}
+.card-shadow{box-shadow:0 2px 10px rgba(0,0,0,0.05);}
+a.source-link{color:#2563eb;text-decoration:underline;}
+.ingredient-row{display:flex;gap:8px;margin-bottom:6px;align-items:center;}
+.ingredient-row input{border:1px solid #e5e7eb;border-radius:10px;padding:8px;font-size:14px;}
+.ingredient-row input:first-child{flex:2;}
+.ingredient-row input:last-child{flex:1;}
+.step-check{width:20px;height:20px;border:2px solid #d1d5db;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
+.step-check.checked{background:#22c55e;border-color:#22c55e;color:white;}
+.step-check.checked::after{content:"✓";font-size:14px;}
+.cooking-overlay{position:fixed;inset:0;background:white;z-index:999;overflow-y:auto;padding:20px;display:none;}
+.cooking-overlay.show{display:block;}
+.timer-display{font-size:28px;font-weight:bold;color:#22c55e;text-align:center;margin:10px 0;}
+</style>
+</head>
+<body class="max-w-md mx-auto bg-white min-h-screen pb-20">
+<div id="app">
+  <!-- 首页 -->
+  <div id="page-home" class="page active p-5">
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-xl font-semibold text-neutral-800">今日做菜记录</h1>
+      <input type="date" id="selDate" class="text-primary border-none bg-neutral-50 rounded p-1"/>
+    </div>
+    <div class="bg-neutral-50 rounded-2xl p-5 card-shadow mb-5">
+      <h2 class="font-medium mb-3 text-neutral-800">当天已做菜品</h2>
+      <div id="todayRecordList" class="min-h-[60px] text-sm text-neutral-600"></div>
+    </div>
+    <div class="bg-neutral-50 rounded-2xl p-5 card-shadow">
+      <h2 class="font-medium mb-3 text-neutral-800">快速添加记录</h2>
+      <p class="text-sm text-neutral-500 mb-3">从食谱库选择菜品，记录到当前日期</p>
+      <div id="selectRecipeForLog" class="space-y-2 max-h-52 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- 食谱库 -->
+  <div id="page-library" class="page p-5">
+    <div class="flex justify-between items-center mb-5">
+      <h1 class="text-xl font-semibold text-neutral-800">我的食谱库</h1>
+      <button id="btnAddRecipe" class="bg-primary text-white px-3 py-2 rounded-xl flex items-center">
+        <i data-lucide="plus" class="w-4 h-4 mr-1"></i>新增食谱
+      </button>
+    </div>
+    <div class="mb-4">
+      <input id="recipeSearchInput" type="text" placeholder="🔍 搜索菜名或食材..." class="w-full p-3 bg-neutral-50 rounded-xl outline-none">
+    </div>
+    <div id="recipeLibraryList" class="space-y-3 mb-5"></div>
+    <p id="syncStatus" class="text-xs text-neutral-400 mt-2 text-center">正在连接...</p>
+  </div>
+
+  <!-- 购物清单 -->
+  <div id="page-shopping" class="page p-5">
+    <div class="flex justify-between items-center mb-5">
+      <h1 class="text-xl font-semibold text-neutral-800">购物清单</h1>
+      <button id="clearShoppingBtn" class="text-red-500 text-sm">清空</button>
+    </div>
+    <div id="shoppingListContainer" class="space-y-2 mb-5"></div>
+    <button id="addShoppingItemBtn" class="w-full py-3 bg-primary text-white rounded-xl">手动添加</button>
+  </div>
+
+  <!-- 新增/编辑食谱 -->
+  <div id="modalAddRecipe" class="modal fixed inset-0 bg-black/40 items-center justify-center z-50 p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl p-5 max-h-[85vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <h3 id="recipeModalTitle" class="text-lg font-semibold">添加新食谱</h3>
+        <button id="closeAddRecipeModal"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-neutral-600 block mb-1">菜名 <span class="text-red-500">*</span></label>
+          <input id="rName" type="text" class="w-full p-3 bg-neutral-50 rounded-xl" placeholder="输入菜品名称">
+        </div>
+        <div>
+          <label class="text-sm text-neutral-600 block mb-1">来源网址（选填）</label>
+          <input id="rSourceUrl" type="url" class="w-full p-3 bg-neutral-50 rounded-xl" placeholder="https://xxx.com/xxx">
+        </div>
+        <div>
+          <label class="text-sm text-neutral-600 block mb-1">食材 <span class="text-red-500">*</span></label>
+          <div id="ingredientsContainer"></div>
+          <button id="addIngredientBtn" class="text-sm text-primary mt-1">+ 添加食材</button>
+        </div>
+        <div>
+          <label class="text-sm text-neutral-600 block mb-1">加工步骤 <span class="text-red-500">*</span></label>
+          <textarea id="rStep" rows="4" class="w-full p-3 bg-neutral-50 rounded-xl resize-none" placeholder="每行一个步骤"></textarea>
+        </div>
+      </div>
+      <button id="saveRecipeBtn" class="w-full py-3 bg-primary text-white rounded-xl mt-5">保存食谱</button>
+    </div>
+  </div>
+
+  <!-- 食谱详情 -->
+  <div id="modalRecipeDetail" class="modal fixed inset-0 bg-black/40 items-center justify-center z-50 p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl p-5 max-h-[85vh] overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <h3 id="detailName" class="text-lg font-semibold"></h3>
+        <button id="closeDetailModal"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div class="space-y-4">
+        <div><p class="text-sm font-medium text-neutral-700">来源链接</p><p id="detailSourceUrl" class="text-sm text-neutral-600 bg-neutral-50 p-3 rounded-xl"></p></div>
+        <div><p class="text-sm font-medium text-neutral-700">食材</p><div id="detailIngredients" class="text-sm text-neutral-600 bg-neutral-50 p-3 rounded-xl"></div></div>
+        <div><p class="text-sm font-medium text-neutral-700">加工步骤</p><p id="detailStep" class="text-sm text-neutral-600 bg-neutral-50 p-3 rounded-xl whitespace-pre-line"></p></div>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mt-5">
+        <button id="startCookingBtn" class="py-3 bg-primary text-white rounded-xl">开始烹饪</button>
+        <button id="addToShoppingBtn" class="py-3 bg-blue-500 text-white rounded-xl">加入购物清单</button>
+      </div>
+      <div class="grid grid-cols-3 gap-2 mt-2">
+        <button id="addLogFromDetail" class="py-3 bg-primary text-white rounded-xl">记录今日</button>
+        <button id="editRecipeBtn" class="py-3 bg-neutral-200 text-neutral-800 rounded-xl">编辑</button>
+        <button id="delRecipeBtn" class="py-3 bg-neutral-100 text-red-500 rounded-xl">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 烹饪模式 -->
+  <div id="cookingOverlay" class="cooking-overlay">
+    <div class="flex justify-between items-center mb-4">
+      <h2 id="cookingTitle" class="text-xl font-bold"></h2>
+      <button id="closeCookingBtn" class="text-neutral-500 text-2xl">&times;</button>
+    </div>
+    <div id="cookingSteps" class="space-y-4 mb-6"></div>
+    <div id="timerArea" class="hidden bg-neutral-50 rounded-xl p-4 text-center">
+      <p class="text-sm text-neutral-500 mb-1">计时器</p>
+      <div id="timerDisplay" class="timer-display">00:00</div>
+      <div class="flex gap-2 justify-center">
+        <button id="timerStartBtn" class="bg-primary text-white px-4 py-2 rounded-lg">开始</button>
+        <button id="timerPauseBtn" class="bg-neutral-200 text-neutral-800 px-4 py-2 rounded-lg">暂停</button>
+        <button id="timerResetBtn" class="bg-neutral-100 text-neutral-600 px-4 py-2 rounded-lg">重置</button>
+      </div>
+    </div>
+    <button id="finishCookingBtn" class="w-full py-3 bg-primary text-white rounded-xl mt-4">完成烹饪</button>
+  </div>
+
+  <!-- 评分备注 -->
+  <div id="modalRating" class="modal fixed inset-0 bg-black/40 items-center justify-center z-50 p-4">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-5">
+      <h3 class="text-lg font-semibold mb-4">记录评分与备注</h3>
+      <div class="mb-3">
+        <label class="text-sm text-neutral-600 block mb-1">评分</label>
+        <div id="ratingStars" class="flex gap-1 text-3xl text-yellow-400 cursor-pointer">
+          <span data-star="1">★</span><span data-star="2">★</span><span data-star="3">★</span>
+          <span data-star="4">★</span><span data-star="5">★</span>
+        </div>
+      </div>
+      <div class="mb-4">
+        <label class="text-sm text-neutral-600 block mb-1">备注</label>
+        <textarea id="ratingNote" rows="2" class="w-full p-3 bg-neutral-50 rounded-xl resize-none" placeholder="例如：盐放多了"></textarea>
+      </div>
+      <div class="mb-4">
+        <label class="text-sm text-neutral-600 block mb-1">上传图片</label>
+        <input type="file" id="ratingImageInput" accept="image/*" class="hidden">
+        <div id="ratingImagePreviewWrap" class="hidden relative w-24 h-24 mt-2">
+          <img id="ratingImagePreview" class="w-full h-full object-cover rounded-xl" src="">
+          <button id="removeRatingImageBtn" class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs">×</button>
+        </div>
+        <button id="uploadImageBtn" class="mt-2 text-sm bg-neutral-100 text-neutral-600 px-3 py-1 rounded-lg">选择图片</button>
+      </div>
+      <div class="flex gap-2">
+        <button id="ratingCancelBtn" class="flex-1 py-2 bg-neutral-100 rounded-xl">取消</button>
+        <button id="ratingSaveBtn" class="flex-1 py-2 bg-primary text-white rounded-xl">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部导航 -->
+  <div class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-neutral-100 px-4 py-3 z-40">
+    <div class="flex justify-around">
+      <button data-page="home" class="navBtn flex flex-col items-center"><i data-lucide="calendar" class="w-5 h-5"></i><span class="text-xs mt-1">记录</span></button>
+      <button data-page="library" class="navBtn flex flex-col items-center"><i data-lucide="book-open" class="w-5 h-5"></i><span class="text-xs mt-1">食谱库</span></button>
+      <button data-page="shopping" class="navBtn flex flex-col items-center"><i data-lucide="shopping-cart" class="w-5 h-5"></i><span class="text-xs mt-1">购物清单</span></button>
+    </div>
+  </div>
+</div>
+
+<script>
+lucide.createIcons();
+
+// ========== 配置区：替换成你自己的 ==========
+const SUPABASE_URL = "https://mpwohfwnxyazorhkxbod.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wd29oZndueHlhem9yaGt4Ym9kIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3OTI3MzksImV4cCI6MjEwNzM2ODczOX0.4hKHqKgWtg_ozee0fPsp-Ag53MPDQiNQPnVSNO33jAo";
+// =========================================
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const POLL_INTERVAL = 5000; // 5秒刷新一次
+
+let currentDate = new Date().toISOString().split('T')[0];
+let selectedRecipeId = null;
+let editMode = false;
+let currentRatingLogId = null;
+let currentStars = 0;
+let currentRatingImageBase64 = "";
+let timerInterval = null;
+let timerSeconds = 0;
+let timerRunning = false;
+
+// 内存缓存
+let cachedRecipes = [];
+let cachedLogs = [];
+let cachedShopping = [];
+
+// ========== 数据操作 ==========
+async function loadAll() {
+  try {
+    const [r, l, s] = await Promise.all([
+      supabase.from('recipes').select('*').order('created_at', { ascending: false }),
+      supabase.from('cook_logs').select('*').order('created_at', { ascending: false }),
+      supabase.from('shopping_list').select('*').order('created_at', { ascending: false })
+    ]);
+    if (r.error) throw r.error;
+    if (l.error) throw l.error;
+    if (s.error) throw s.error;
+    cachedRecipes = r.data || [];
+    cachedLogs = l.data || [];
+    cachedShopping = s.data || [];
+    document.getElementById('syncStatus').textContent = '✅ 已连接 · ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('syncStatus').textContent = '❌ 连接失败：' + e.message;
+  }
+}
+
+async function dbAdd(table, data) {
+  const { error } = await supabase.from(table).insert(data);
+  if (error) { alert('保存失败：' + error.message); throw error; }
+  await loadAll();
+}
+async function dbPut(table, data) {
+  const { error } = await supabase.from(table).upsert(data);
+  if (error) { alert('更新失败：' + error.message); throw error; }
+  await loadAll();
+}
+async function dbDel(table, id) {
+  const { error } = await supabase.from(table).delete().eq('id', id);
+  if (error) { alert('删除失败：' + error.message); throw error; }
+  await loadAll();
+}
+async function dbClear(table) {
+  const { error } = await supabase.from(table).delete().neq('id', '___never___');
+  if (error) { alert('清空失败：' + error.message); throw error; }
+  await loadAll();
+}
+
+// ========== 页面切换 ==========
+function switchPage(pageName){
+  document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
+  document.getElementById("page-"+pageName).classList.add("active");
+  document.querySelectorAll(".navBtn").forEach(b=>{
+    const active = b.dataset.page === pageName;
+    b.classList.remove("text-primary", "text-neutral-400");
+    b.classList.add(active ? "text-primary" : "text-neutral-400");
+  });
+  if(pageName==="library") renderRecipeLibrary();
+  if(pageName==="home") renderHomePage();
+  if(pageName==="shopping") renderShoppingList();
+}
+
+function showModal(id){document.getElementById(id).classList.add("show");}
+function hideModal(id){document.getElementById(id).classList.remove("show");}
+
+// ========== 食材行 ==========
+function renderIngredientRows(ingredients = []) {
+  const container = document.getElementById("ingredientsContainer");
+  container.innerHTML = "";
+  if (ingredients.length === 0) addIngredientRow("", "");
+  else ingredients.forEach(ing => addIngredientRow(ing.name, ing.amount));
+}
+function addIngredientRow(name = "", amount = "") {
+  const container = document.getElementById("ingredientsContainer");
+  const div = document.createElement("div");
+  div.className = "ingredient-row";
+  div.innerHTML = `
+    <input type="text" placeholder="食材名称" value="${(name||'').replace(/"/g,'&quot;')}" class="ing-name">
+    <input type="text" placeholder="用量" value="${(amount||'').replace(/"/g,'&quot;')}" class="ing-amount">
+    <button class="text-red-400 text-lg px-1 remove-ing">×</button>
+  `;
+  container.appendChild(div);
+  div.querySelector(".remove-ing").onclick = () => div.remove();
+}
+function collectIngredients() {
+  const rows = document.querySelectorAll("#ingredientsContainer .ingredient-row");
+  const arr = [];
+  rows.forEach(row => {
+    const name = row.querySelector(".ing-name").value.trim();
+    const amount = row.querySelector(".ing-amount").value.trim();
+    if (name) arr.push({ name, amount });
+  });
+  return arr;
+}
+
+// ========== 首页 ==========
+async function renderHomePage(){
+  document.getElementById("selDate").value = currentDate;
+  const recipes = cachedRecipes;
+  const todayLogs = cachedLogs.filter(x=>x.date === currentDate);
+  const recordWrap = document.getElementById("todayRecordList");
+  if(todayLogs.length===0){
+    recordWrap.innerHTML = "<p class='text-neutral-400'>该日期暂无做菜记录</p>";
+  }else{
+    recordWrap.innerHTML = todayLogs.map(item=>{
+      const r = recipes.find(r=>r.id===item.recipe_id);
+      const stars = item.rating ? '★'.repeat(item.rating) + '☆'.repeat(5-item.rating) : '';
+      const note = item.note ? `<span class="text-xs text-neutral-400 ml-1">${item.note}</span>` : '';
+      const imgHtml = item.image ? `<img src="${item.image}" class="w-10 h-10 object-cover rounded-lg ml-2 cursor-pointer view-log-img" data-img="${item.image}">` : '';
+      return `
+      <div class="py-2 border-b border-neutral-100 flex justify-between items-center">
+        <div class="flex items-center">
+          <div>
+            <span>✅ ${r?.name||"已删除菜品"}</span>
+            ${stars ? `<span class="text-yellow-400 text-xs ml-1">${stars}</span>` : ''}
+            ${note}
+          </div>
+          ${imgHtml}
+        </div>
+        <div class="flex gap-1">
+          <button class="editLogBtn text-blue-400 text-xs px-2 py-1" data-logid="${item.id}">编辑</button>
+          <button class="delLogBtn text-red-400 text-xs px-2 py-1" data-logid="${item.id}">删除</button>
+        </div>
+      </div>`
+    }).join("");
+
+    document.querySelectorAll(".delLogBtn").forEach(btn=>{
+      btn.onclick = async ()=>{
+        if(confirm("确定删除这条做菜记录？")){
+          await dbDel("cook_logs", btn.dataset.logid);
+          renderHomePage();
+        }
+      }
+    });
+    document.querySelectorAll(".editLogBtn").forEach(btn=>{
+      btn.onclick = ()=>{
+        const log = todayLogs.find(x=>x.id === btn.dataset.logid);
+        if (log) openRatingModal(log.id, log.rating || 0, log.note || "", log.image || "");
+      }
+    });
+    document.querySelectorAll(".view-log-img").forEach(img => {
+      img.onclick = () => {
+        const w = window.open();
+        w.document.write(`<img src="${img.dataset.img}" style="max-width:100%; height:auto;">`);
+      };
+    });
+  }
+
+  const selWrap = document.getElementById("selectRecipeForLog");
+  if(recipes.length===0){
+    selWrap.innerHTML = "<p class='text-neutral-400 text-sm'>食谱库为空，请先添加食谱</p>";
+  }else{
+    selWrap.innerHTML = recipes.map(r=>`
+      <div class="p-2 bg-white rounded-lg border border-neutral-200 cursor-pointer recipeLogItem" data-id="${r.id}">${r.name}</div>
+    `).join("");
+    document.querySelectorAll(".recipeLogItem").forEach(el=>{
+      el.onclick = async ()=>{
+        const id = 'log_' + Date.now();
+        await dbAdd("cook_logs", { id, date: currentDate, recipe_id: el.dataset.id, rating: 0, note: '', image: '' });
+        openRatingModal(id, 0, "");
+        renderHomePage();
+        alert("✅ 已记录，请填写评分与备注");
+      }
+    })
+  }
+  lucide.createIcons();
+}
+
+// ========== 评分弹窗 ==========
+function openRatingModal(logId, rating, note, imageBase64 = "") {
+  currentRatingLogId = logId;
+  currentStars = rating;
+  currentRatingImageBase64 = imageBase64;
+  document.getElementById("ratingNote").value = note;
+  updateStars(rating);
+  const previewWrap = document.getElementById("ratingImagePreviewWrap");
+  const previewImg = document.getElementById("ratingImagePreview");
+  if (imageBase64) { previewImg.src = imageBase64; previewWrap.classList.remove("hidden"); }
+  else { previewImg.src = ""; previewWrap.classList.add("hidden"); }
+  showModal("modalRating");
+}
+function updateStars(rating) {
+  document.querySelectorAll("#ratingStars span").forEach(span => {
+    span.textContent = Number(span.dataset.star) <= rating ? "★" : "☆";
+  });
+}
+document.getElementById("ratingStars").addEventListener("click", (e) => {
+  const star = e.target.dataset.star;
+  if (star) { currentStars = Number(star); updateStars(currentStars); }
+});
+document.getElementById("ratingSaveBtn").onclick = async () => {
+  const note = document.getElementById("ratingNote").value.trim();
+  const log = cachedLogs.find(x => x.id === currentRatingLogId);
+  if (log) {
+    await dbPut("cook_logs", { ...log, rating: currentStars, note, image: currentRatingImageBase64 });
+  }
+  hideModal("modalRating");
+  renderHomePage();
+};
+document.getElementById("ratingCancelBtn").onclick = () => hideModal("modalRating");
+
+document.getElementById("uploadImageBtn").onclick = () => document.getElementById("ratingImageInput").click();
+document.getElementById("ratingImageInput").onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.size > 500 * 1024) {
+    alert("图片不要超过 500KB，否则数据库会爆。请先压缩。");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    currentRatingImageBase64 = ev.target.result;
+    document.getElementById("ratingImagePreview").src = currentRatingImageBase64;
+    document.getElementById("ratingImagePreviewWrap").classList.remove("hidden");
+  };
+  reader.readAsDataURL(file);
+};
+document.getElementById("removeRatingImageBtn").onclick = () => {
+  currentRatingImageBase64 = "";
+  document.getElementById("ratingImagePreview").src = "";
+  document.getElementById("ratingImagePreviewWrap").classList.add("hidden");
+  document.getElementById("ratingImageInput").value = "";
+};
+
+// ========== 食谱库 ==========
+async function renderRecipeLibrary(){
+  const searchText = document.getElementById("recipeSearchInput").value.trim().toLowerCase();
+  const list = cachedRecipes;
+  const filterList = list.filter(item=> {
+    if (!searchText) return true;
+    const nameMatch = item.name.toLowerCase().includes(searchText);
+    const ingMatch = item.ingredients && item.ingredients.some(ing => ing.name.toLowerCase().includes(searchText));
+    return nameMatch || ingMatch;
+  });
+  const wrap = document.getElementById("recipeLibraryList");
+  if(filterList.length===0){
+    wrap.innerHTML = list.length ===0
+      ? "<p class='text-neutral-400 text-center py-10'>食谱库暂无菜品，点击右上角新增食谱</p>"
+      : "<p class='text-neutral-400 text-center py-10'>没有找到匹配的食谱</p>";
+  }else{
+    wrap.innerHTML = filterList.map(r=>`
+      <div class="bg-neutral-50 rounded-xl p-4 card-shadow recipeListItem cursor-pointer" data-id="${r.id}">
+        <p class="font-medium text-neutral-800">${r.name}</p>
+        <p class="text-xs text-neutral-500 mt-1">${r.ingredients ? r.ingredients.map(i=>i.name).join('、') : (r.material||'').substring(0,24)}...</p>
+      </div>
+    `).join("");
+    document.querySelectorAll(".recipeListItem").forEach(el=>{
+      el.onclick = ()=>{
+        selectedRecipeId = el.dataset.id;
+        const recipe = cachedRecipes.find(x=>x.id === selectedRecipeId);
+        document.getElementById("detailName").innerText = recipe.name;
+        const detailIng = document.getElementById("detailIngredients");
+        if (recipe.ingredients && recipe.ingredients.length) {
+          detailIng.innerHTML = recipe.ingredients.map(ing => `<div>• ${ing.name} ${ing.amount}</div>`).join('');
+        } else {
+          detailIng.innerText = recipe.material || "无";
+        }
+        document.getElementById("detailStep").innerText = recipe.step;
+        const sourceDom = document.getElementById("detailSourceUrl");
+        if(recipe.source_url){
+          sourceDom.innerHTML = `<a class="source-link" href="${recipe.source_url}" target="_blank">${recipe.source_url}</a>`;
+        }else{
+          sourceDom.innerText = "无";
+        }
+        showModal("modalRecipeDetail");
+      }
+    })
+  }
+  lucide.createIcons();
+}
+
+// ========== 编辑/保存/删除食谱 ==========
+function openEditModal(){
+  hideModal("modalRecipeDetail");
+  const recipe = cachedRecipes.find(x=>x.id === selectedRecipeId);
+  editMode = true;
+  document.getElementById("recipeModalTitle").innerText = "编辑食谱";
+  document.getElementById("rName").value = recipe.name;
+  document.getElementById("rSourceUrl").value = recipe.source_url || "";
+  renderIngredientRows(recipe.ingredients || []);
+  document.getElementById("rStep").value = recipe.step;
+  showModal("modalAddRecipe");
+}
+
+async function saveRecipe(){
+  const name = document.getElementById("rName").value.trim();
+  const sourceUrl = document.getElementById("rSourceUrl").value.trim();
+  const ingredients = collectIngredients();
+  const step = document.getElementById("rStep").value.trim();
+  if(!name){alert("菜名不能为空！");return;}
+  if(ingredients.length === 0){alert("至少填写一种食材！");return;}
+  if(!step){alert("加工步骤不能为空！");return;}
+
+  const materialText = ingredients.map(i=>`${i.name} ${i.amount}`).join('\n');
+  const data = {
+    name, source_url: sourceUrl, ingredients, material: materialText, step
+  };
+  if(editMode){
+    await dbPut("recipes", { ...data, id: selectedRecipeId });
+    editMode = false;
+  }else{
+    await dbAdd("recipes", { ...data, id: "r_" + Date.now() });
+  }
+  hideModal("modalAddRecipe");
+  renderRecipeLibrary();
+  alert("✅ 保存成功");
+}
+
+async function deleteRecipe(){
+  if(!confirm("确定删除这个食谱？"))return;
+  await dbDel("recipes", selectedRecipeId);
+  hideModal("modalRecipeDetail");
+  renderRecipeLibrary();
+  renderHomePage();
+}
+
+async function addLogFromDetail(){
+  const id = 'log_' + Date.now();
+  await dbAdd("cook_logs", { id, date: currentDate, recipe_id: selectedRecipeId, rating: 0, note: '', image: '' });
+  hideModal("modalRecipeDetail");
+  switchPage("home");
+  openRatingModal(id, 0, "");
+}
+
+// ========== 烹饪模式 ==========
+function startCooking() {
+  const recipe = cachedRecipes.find(x => x.id === selectedRecipeId);
+  if (!recipe) return;
+  document.getElementById("cookingTitle").innerText = recipe.name;
+  const steps = recipe.step.split('\n').filter(s => s.trim());
+  const container = document.getElementById("cookingSteps");
+  container.innerHTML = steps.map((s, idx) => `
+    <div class="flex items-start gap-3 bg-neutral-50 p-3 rounded-xl">
+      <div class="step-check" data-step="${idx}"></div>
+      <div class="flex-1">
+        <p class="text-sm">${s}</p>
+        <button class="text-xs text-primary mt-1 set-timer" data-step-text="${s.replace(/"/g,'&quot;')}">⏱ 计时</button>
+      </div>
+    </div>
+  `).join('');
+  container.querySelectorAll(".step-check").forEach(el => {
+    el.onclick = () => el.classList.toggle("checked");
+  });
+  container.querySelectorAll(".set-timer").forEach(btn => {
+    btn.onclick = () => {
+      const match = btn.dataset.stepText.match(/(\d+)\s*(分钟|小时|秒)/);
+      if (match) {
+        const num = parseInt(match[1]); const unit = match[2];
+        let seconds = num;
+        if (unit === '分钟') seconds = num * 60;
+        if (unit === '小时') seconds = num * 3600;
+        timerSeconds = seconds; updateTimerDisplay();
+        document.getElementById("timerArea").classList.remove("hidden");
+        clearInterval(timerInterval); timerRunning = false;
+        alert(`已设置计时：${num}${unit}`);
+      } else alert("未在步骤中识别到时间，请手动设置");
+    };
+  });
+  hideModal("modalRecipeDetail");
+  document.getElementById("cookingOverlay").classList.add("show");
+}
+document.getElementById("closeCookingBtn").onclick = () => {
+  document.getElementById("cookingOverlay").classList.remove("show");
+  clearInterval(timerInterval); timerRunning = false;
+};
+document.getElementById("finishCookingBtn").onclick = () => {
+  document.getElementById("cookingOverlay").classList.remove("show");
+  clearInterval(timerInterval); timerRunning = false;
+  addLogFromDetail();
+};
+function updateTimerDisplay() {
+  const m = Math.floor(timerSeconds / 60).toString().padStart(2,'0');
+  const s = (timerSeconds % 60).toString().padStart(2,'0');
+  document.getElementById("timerDisplay").textContent = `${m}:${s}`;
+}
+document.getElementById("timerStartBtn").onclick = () => {
+  if (timerRunning || timerSeconds <= 0) return;
+  timerRunning = true;
+  timerInterval = setInterval(() => {
+    if (timerSeconds > 0) { timerSeconds--; updateTimerDisplay(); }
+    else { clearInterval(timerInterval); timerRunning = false; alert("⏰ 时间到！"); }
+  }, 1000);
+};
+document.getElementById("timerPauseBtn").onclick = () => { clearInterval(timerInterval); timerRunning = false; };
+document.getElementById("timerResetBtn").onclick = () => { clearInterval(timerInterval); timerRunning = false; timerSeconds = 0; updateTimerDisplay(); };
+
+// ========== 购物清单 ==========
+async function addToShoppingList() {
+  const recipe = cachedRecipes.find(x => x.id === selectedRecipeId);
+  if (!recipe) return;
+  let ingredients = recipe.ingredients;
+  if (!ingredients || ingredients.length === 0) {
+    if (recipe.material) {
+      ingredients = recipe.material.split('\n').map(l=>l.trim()).filter(l=>l).map(l=>({name:l, amount:''}));
+    } else { alert("该食谱没有食材信息"); return; }
+  }
+  for (const ing of ingredients) {
+    await dbAdd("shopping_list", {
+      id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
+      name: ing.name, amount: ing.amount || '', checked: false, recipe_name: recipe.name
+    });
+  }
+  alert("✅ 已加入购物清单");
+  hideModal("modalRecipeDetail");
+  renderShoppingList();
+}
+
+async function renderShoppingList() {
+  const items = cachedShopping;
+  const container = document.getElementById("shoppingListContainer");
+  if (items.length === 0) {
+    container.innerHTML = "<p class='text-neutral-400 text-center py-10'>购物清单为空</p>";
+    return;
+  }
+  container.innerHTML = items.map(item => `
+    <div class="flex items-center gap-3 bg-neutral-50 p-3 rounded-xl">
+      <input type="checkbox" class="w-5 h-5" ${item.checked ? 'checked' : ''} data-id="${item.id}">
+      <div class="flex-1 ${item.checked ? 'line-through text-neutral-400' : ''}">
+        <span class="font-medium">${item.name}</span>
+        <span class="text-sm text-neutral-500 ml-2">${item.amount || ''}</span>
+        <span class="text-xs text-neutral-400 ml-2">${item.recipe_name || ''}</span>
+      </div>
+      <button class="text-red-400 text-sm del-shopping" data-id="${item.id}">删除</button>
+    </div>
+  `).join('');
+  container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.onchange = async () => {
+      const item = items.find(x => x.id === cb.dataset.id);
+      if (item) await dbPut("shopping_list", { ...item, checked: cb.checked });
+      renderShoppingList();
+    };
+  });
+  container.querySelectorAll('.del-shopping').forEach(btn => {
+    btn.onclick = async () => { await dbDel("shopping_list", btn.dataset.id); renderShoppingList(); };
+  });
+}
+document.getElementById("clearShoppingBtn").onclick = async () => {
+  if (confirm("确定清空购物清单？")) { await dbClear("shopping_list"); renderShoppingList(); }
+};
+document.getElementById("addShoppingItemBtn").onclick = async () => {
+  const name = prompt("输入食材名称：");
+  if (name) {
+    const amount = prompt("输入用量（选填）：");
+    await dbAdd("shopping_list", {
+      id: 's_' + Date.now(), name, amount: amount || "", checked: false, recipe_name: ""
+    });
+    renderShoppingList();
+  }
+};
+
+// ========== 绑定事件 ==========
+async function bindEvents(){
+  await loadAll();
+
+  document.querySelectorAll(".navBtn").forEach(b=>b.onclick=()=>switchPage(b.dataset.page));
+  document.getElementById("selDate").onchange = e=>{ currentDate = e.target.value; renderHomePage(); }
+  document.getElementById("recipeSearchInput").oninput = ()=>renderRecipeLibrary();
+  document.getElementById("btnAddRecipe").onclick = ()=>{
+    editMode = false;
+    document.getElementById("recipeModalTitle").innerText = "添加新食谱";
+    document.getElementById("rName").value="";
+    document.getElementById("rSourceUrl").value="";
+    renderIngredientRows([]);
+    document.getElementById("rStep").value="";
+    showModal("modalAddRecipe");
+  };
+  document.getElementById("closeAddRecipeModal").onclick = ()=>hideModal("modalAddRecipe");
+  document.getElementById("saveRecipeBtn").onclick = saveRecipe;
+  document.getElementById("closeDetailModal").onclick = ()=>hideModal("modalRecipeDetail");
+  document.getElementById("delRecipeBtn").onclick = deleteRecipe;
+  document.getElementById("editRecipeBtn").onclick = openEditModal;
+  document.getElementById("addLogFromDetail").onclick = addLogFromDetail;
+  document.getElementById("startCookingBtn").onclick = startCooking;
+  document.getElementById("addToShoppingBtn").onclick = addToShoppingList;
+  document.getElementById("addIngredientBtn").onclick = () => addIngredientRow();
+
+  // 轮询刷新（方案二核心）
+  setInterval(async () => {
+    await loadAll();
+    const activePage = document.querySelector(".page.active").id;
+    if (activePage === "page-home") renderHomePage();
+    else if (activePage === "page-library") renderRecipeLibrary();
+    else if (activePage === "page-shopping") renderShoppingList();
+  }, POLL_INTERVAL);
+
+  switchPage("home");
+}
+
+bindEvents();
+</script>
+</body>
+</html>
